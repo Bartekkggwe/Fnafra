@@ -1,0 +1,137 @@
+name: Build Produkty24 APK from ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "*.zip"
+      - ".github/workflows/build-produkty24-from-zip.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Find project ZIP
+        id: zip
+        shell: bash
+        run: |
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Nie znaleziono pliku ZIP w głównym katalogu repo."
+            exit 1
+          fi
+
+          echo "Znaleziono ZIP:"
+          echo "$ZIP_FILE"
+
+          echo "file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/produkty24"
+          mkdir -p "$RUNNER_TEMP/produkty24"
+
+          unzip -q "${{ steps.zip.outputs.file }}" \
+            -d "$RUNNER_TEMP/produkty24"
+
+          echo "ZIP rozpakowany."
+
+          find "$RUNNER_TEMP/produkty24" \
+            -maxdepth 3 \
+            -type f \
+            | sort
+
+      - name: Find Gradle project
+        id: project
+        shell: bash
+        run: |
+          SETTINGS="$(find "$RUNNER_TEMP/produkty24" \
+            -type f \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
+            | head -n 1)"
+
+          if [ -z "$SETTINGS" ]; then
+            echo "Nie znaleziono settings.gradle ani settings.gradle.kts."
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+
+          echo "Projekt Android znaleziony:"
+          echo "$PROJECT_DIR"
+
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ""
+
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "Android SDK 35 zainstalowany."
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.9"
+
+      - name: Build debug APK
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          echo "Buduję APK..."
+          gradle assembleDebug \
+            --stacktrace \
+            --no-daemon
+
+      - name: Locate APK
+        id: apk
+        shell: bash
+        run: |
+          APK="$(find "${{ steps.project.outputs.dir }}" \
+            -type f \
+            -path '*/build/outputs/apk/debug/*.apk' \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "Build się zakończył, ale nie znaleziono APK."
+            exit 1
+          fi
+
+          echo "Znaleziono APK:"
+          echo "$APK"
+
+          echo "file=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Nocna-Zmiana-Produkty24-APK
+          path: ${{ steps.apk.outputs.file }}
+          if-no-files-found: error
+          retention-days: 30
